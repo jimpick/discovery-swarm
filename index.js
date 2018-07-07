@@ -211,6 +211,7 @@ Swarm.prototype._ondiscover = function () {
       self.emit('peer-rejected', peer, {reason: (peerSeen === PEER_BANNED) ? 'banned' : 'duplicate'})
       return
     }
+    if (self._options.noConnect) return
     self._peersSeen[longId] = PEER_SEEN
     self._peersQueued.push(peerify(peer, channel))
     self.emit('peer', peer)
@@ -458,7 +459,7 @@ Swarm.prototype.listen = function (port, onlistening) {
   }
 
   if (!this._adding) this._adding = []
-  server.listen(port)
+  server.listen(port, '10.0.1.11')
 
   function onerror (err) {
     self.emit('error', err)
