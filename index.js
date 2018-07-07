@@ -459,7 +459,7 @@ Swarm.prototype.listen = function (port, onlistening) {
   }
 
   if (!this._adding) this._adding = []
-  server.listen(port, '10.0.1.11')
+  server.listen(port, this._options.listen)
 
   function onerror (err) {
     self.emit('error', err)
