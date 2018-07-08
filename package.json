@@ -1,13 +1,14 @@
 {
-  "name": "discovery-swarm",
+  "name": "@jimpick/discovery-swarm-multicast",
   "version": "5.1.2",
   "description": "A network swarm that uses discovery-channel to find peers",
   "main": "index.js",
   "dependencies": {
+    "@jimpick/discovery-channel-multicast": "../discovery-channel-multicast",
     "buffer-equals": "^1.0.3",
     "connections": "^1.4.2",
     "debug": "^3.1.0",
-    "discovery-channel": "^5.5.1",
+    "duplexify": "^3.6.0",
     "length-prefixed-message": "^3.0.3",
     "pump": "^3.0.0",
     "to-buffer": "^1.0.1"

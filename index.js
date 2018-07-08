@@ -1,4 +1,4 @@
-var discovery = require('discovery-channel')
+var discovery = require('@jimpick/discovery-channel-multicast')
 var pump = require('pump')
 var events = require('events')
 var util = require('util')
@@ -8,13 +8,18 @@ var toBuffer = require('to-buffer')
 var crypto = require('crypto')
 var lpmessage = require('length-prefixed-message')
 var connections = require('connections')
-var debug = require('debug')('discovery-swarm')
+var dgram = require('dgram')
+var stream = require('stream')
+var duplexify = require('duplexify')
+var debug = require('debug')('discovery-swarm-multicast')
 
+/*
 try {
   var utp = require('utp-native')
 } catch (err) {
   // do nothing
 }
+*/
 
 var PEER_SEEN = 1
 var PEER_BANNED = 2
@@ -44,8 +49,32 @@ function Swarm (opts) {
   this._options = opts || {}
   this._whitelist = opts.whitelist || []
   this._discovery = null
-  this._tcp = opts.tcp === false ? null : net.createServer().on('connection', onconnection)
-  this._utp = opts.utp === false || !utp ? null : utp().on('connection', onconnection)
+  // this._tcp = opts.tcp === false ? null : net.createServer().on('connection', onconnection)
+  // this._utp = opts.utp === false || !utp ? null : utp().on('connection', onconnection)
+  this._tcp = null
+  this._utp = null
+
+  this._udpServer = dgram.createSocket('udp4')
+  this._udpServer.bind(function () {
+    self._udpServer.setBroadcast(true)
+    self._udpServer.setMulticastTTL(128);
+  })
+
+  this._udpDuplexStream = duplexify(
+    stream.Writable({
+      write: (chunk, enc, next) => {
+        // console.log('Jim udp send', chunk)
+        self._udpServer.send(chunk, 0, chunk.length, 5007, "224.1.1.1")
+        next()
+      }
+    }),
+    /*
+    stream.Readable({
+      read: () => {} // Can't read
+    })
+    */
+  )
+
   this._tcpConnections = this._tcp && connections(this._tcp)
   this._adding = null
   this._listening = false
@@ -149,6 +178,7 @@ Swarm.prototype.leave = function (name) {
   }
 }
 
+/*
 Swarm.prototype.addPeer = function (name, peer) {
   peer = peerify(peer, toBuffer(name))
   if (this._peersSeen[peer.id]) return
@@ -158,6 +188,7 @@ Swarm.prototype.addPeer = function (name, peer) {
   this.emit('peer', peer)
   this._kick()
 }
+*/
 
 Swarm.prototype.removePeer = function (name, peer) {
   peer = peerify(peer, toBuffer(name))
@@ -171,10 +202,14 @@ Swarm.prototype._dropPeer = function (peer) {
 }
 
 Swarm.prototype.address = function () {
-  return this._tcp ? this._tcp.address() : this._utp.address()
+  // return this._tcp ? this._tcp.address() : this._utp.address()
+  return {
+    port: 5007
+  }
 }
 
 Swarm.prototype._ondiscover = function () {
+  // console.log('Jim _ondiscover')
   var self = this
   var joins = this._adding
 
@@ -188,12 +223,15 @@ Swarm.prototype._ondiscover = function () {
     this._options.dht.socket = this._utp
   }
   this._discovery = discovery(this._options)
-  this._discovery.on('peer', onpeer)
-  this._discovery.on('whoami', onwhoami)
+  // this._discovery.on('peer', onpeer)
+  // this._discovery.on('whoami', onwhoami)
   this._adding = null
 
   if (!joins) return
   for (var i = 0; i < joins.length; i++) this.join(joins[i].name, joins[i].opts, joins[i].cb)
+
+  // For udp
+  self._kick()
 
   function onwhoami (me) {
     self._peersSeen[me.host + ':' + me.port] = PEER_BANNED
@@ -226,22 +264,26 @@ Swarm.prototype._kick = function () {
   var self = this
   var connected = false
   var didTimeOut = false
+
+  /*
   var next = this._peersQueued.shift()
   while (next && this._peersSeen[next.id] === PEER_BANNED) {
     next = this._peersQueued.shift()
   }
 
   if (!next) return
+  */
 
   this.totalConnections++
-  this.emit('connecting', next)
-  debug('connecting %s retries=%d', next.id, next.retries)
+  // this.emit('connecting', next)
+  // debug('connecting %s retries=%d', next.id, next.retries)
 
   var tcpSocket = null
   var utpSocket = null
   var tcpClosed = true
   var utpClosed = true
 
+  /*
   if (this._tcp) {
     tcpClosed = false
     tcpSocket = net.connect(next.port, next.host)
@@ -258,6 +300,16 @@ Swarm.prototype._kick = function () {
     utpSocket.on('error', onerror)
     utpSocket.on('close', onclose)
   }
+  */
+
+  // Direct UDP
+  var next
+  connected = true
+  cleanup()
+  debug('onconnect type=udp')
+  // console.log('Jim stream')
+  self._onconnection(this._udpDuplexStream, 'udp', next)
+  return
 
   var timeout = setTimeoutUnref(ontimeout, CONNECTION_TIMEOUT)
 
@@ -362,16 +414,18 @@ Swarm.prototype._onconnection = function (connection, type, peer) {
     connection: connection
   }
 
-  var timeout = setTimeoutUnref(ontimeout, HANDSHAKE_TIMEOUT)
+  // console.log('Jim set timeout')
+  // var timeout = setTimeoutUnref(ontimeout, HANDSHAKE_TIMEOUT)
   if (this.destroyed) connection.destroy()
 
   function ontimeout () {
+    // console.log('Jim ontimeout')
     self.emit('handshake-timeout', connection, info)
     connection.destroy()
   }
 
   function onclose () {
-    clearTimeout(timeout)
+    // clearTimeout(timeout)
     self.totalConnections--
     self.emit('connection-closed', connection, info)
 
@@ -389,8 +443,9 @@ Swarm.prototype._onconnection = function (connection, type, peer) {
 
   function onhandshake (remoteId) {
     if (!remoteId) remoteId = connection.remoteId
-    clearTimeout(timeout)
+    // clearTimeout(timeout)
     remoteIdHex = remoteId.toString('hex')
+    // console.log('Jim onhandshake 1')
 
     if (Buffer.isBuffer(connection.discoveryKey) || Buffer.isBuffer(connection.channel)) {
       var suffix = '@' + (connection.discoveryKey || connection.channel).toString('hex')
@@ -444,8 +499,12 @@ Swarm.prototype._listenNext = function () {
 }
 
 Swarm.prototype.listen = function (port, onlistening) {
+  this._listening = true
+  this.emit('listening')
+  return
+
   if (this.destroyed) return
-  if (this._tcp && this._utp) return this._listenBoth(port, onlistening)
+  // if (this._tcp && this._utp) return this._listenBoth(port, onlistening)
   if (!port) port = 0
   if (onlistening) this.once('listening', onlistening)
 
